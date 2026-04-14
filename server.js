@@ -1,17 +1,12 @@
-const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-const PORT = process.env.PORT || 3000;
-
-// rota básica (IMPORTANTE para Render)
-app.get("/", (req, res) => {
-  res.send("Servidor Z-Link Talk ativo");
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("Z-Link Talk Server OK");
 });
+
+const wss = new WebSocket.Server({ server });
 
 let clients = [];
 
@@ -22,14 +17,14 @@ wss.on("connection", (ws) => {
 
   clients.push(ws);
 
-  // init
+  // envia init
   ws.send(JSON.stringify({
     type: "init",
     id,
     clients: clients.map(c => c.id)
   }));
 
-  // novo peer
+  // avisa outros
   broadcast({
     type: "new_peer",
     id
@@ -74,6 +69,8 @@ wss.on("connection", (ws) => {
   }
 
 });
+
+const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
   console.log("Servidor rodando na porta", PORT);
