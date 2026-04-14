@@ -11,14 +11,14 @@ wss.on("connection", ws => {
 
   clients.push(ws);
 
-  // envia lista de usuários
+  // envia init
   ws.send(JSON.stringify({
     type: "init",
     id,
     clients: clients.map(c => c.id)
   }));
 
-  // avisa novos
+  // avisa outros
   broadcast({
     type: "new_peer",
     id
@@ -33,7 +33,9 @@ wss.on("connection", ws => {
       return;
     }
 
-    // envia para destino específico
+    // 🔥 adicionar origem
+    data.from = ws.id;
+
     if (data.to) {
       const target = clients.find(c => c.id === data.to);
       if (target) target.send(JSON.stringify(data));
@@ -61,4 +63,4 @@ wss.on("connection", ws => {
 
 });
 
-console.log("Servidor MULTI-PEER rodando");
+console.log("Servidor MULTI-PEER OK");
