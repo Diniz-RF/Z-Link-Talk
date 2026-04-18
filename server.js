@@ -14,7 +14,6 @@ let clients = [];
 
 wss.on("connection", (ws) => {
 
-  // 🔥 ID profissional (sem colisão)
   const id = uuidv4();
 
   ws.id = id;
@@ -52,11 +51,18 @@ wss.on("connection", (ws) => {
 
     data.from = ws.id;
 
-    // 🧠 IDENTIFICAÇÃO DO USUÁRIO
+    // 🧠 IDENTIFICAÇÃO DO USUÁRIO (CORRIGIDO)
     if (data.type === "identify") {
       ws.name = data.name || "Anônimo";
 
       console.log(`Usuário identificado: ${ws.id} → ${ws.name}`);
+
+      // 🔥 NOVO: avisar todos sobre mudança de nome
+      broadcast({
+        type: "user_update",
+        id: ws.id,
+        name: ws.name
+      });
 
       return;
     }
