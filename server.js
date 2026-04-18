@@ -12,6 +12,9 @@ const wss = new WebSocket.Server({ server });
 // Lista de clientes conectados
 let clients = [];
 
+// 🔥 NOVO: controle de quem está transmitindo
+let activeTransmitters = new Set();
+
 wss.on("connection", (ws) => {
 
   const id = uuidv4();
@@ -23,14 +26,15 @@ wss.on("connection", (ws) => {
 
   console.log(`Cliente conectado: ${id}`);
 
-  // 📡 Envia lista inicial com nomes
+  // 📡 INIT agora inclui transmissores ativos
   ws.send(JSON.stringify({
     type: "init",
     id,
     clients: clients.map(c => ({
       id: c.id,
       name: c.name
-    }))
+    })),
+    activeTransmitters: Array.from(activeTransmitters)
   }));
 
   // 📢 Notifica outros usuários
@@ -51,13 +55,12 @@ wss.on("connection", (ws) => {
 
     data.from = ws.id;
 
-    // 🧠 IDENTIFICAÇÃO DO USUÁRIO (CORRIGIDO)
+    // 🧠 IDENTIFICAÇÃO DO USUÁRIO
     if (data.type === "identify") {
       ws.name = data.name || "Anônimo";
 
       console.log(`Usuário identificado: ${ws.id} → ${ws.name}`);
 
-      // 🔥 NOVO: avisar todos sobre mudança de nome
       broadcast({
         type: "user_update",
         id: ws.id,
@@ -67,7 +70,16 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // 🔥 Adiciona nome em TODAS mensagens
+    // 🔥 CONTROLE DE TRANSMISSÃO
+    if (data.type === "start_tx") {
+      activeTransmitters.add(ws.id);
+    }
+
+    if (data.type === "stop_tx") {
+      activeTransmitters.delete(ws.id);
+    }
+
+    // 🔥 sempre enviar nome junto
     data.name = ws.name;
 
     if (data.to) {
@@ -85,6 +97,9 @@ wss.on("connection", (ws) => {
     console.log(`Cliente desconectado: ${ws.id}`);
 
     clients = clients.filter(c => c !== ws);
+
+    // 🔥 garantir limpeza do estado de transmissão
+    activeTransmitters.delete(ws.id);
 
     broadcast({
       type: "peer_left",
