@@ -3,7 +3,12 @@ const http = require('http');
 
 const PORT = process.env.PORT || 3000;
 
-const server = http.createServer();
+// ✅ AGORA responde HTTP (IMPORTANTE pro Render)
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Servidor WebSocket ativo');
+});
+
 const wss = new WebSocket.Server({ server });
 
 let clients = [];
@@ -13,7 +18,6 @@ wss.on('connection', (ws) => {
 
     ws.on('message', (data) => {
 
-        // 🔥 BINÁRIO (ÁUDIO)
         if (Buffer.isBuffer(data)) {
             clients.forEach(client => {
                 if (client !== ws && client.readyState === WebSocket.OPEN) {
@@ -23,7 +27,6 @@ wss.on('connection', (ws) => {
             return;
         }
 
-        // 🔥 JSON (CONTROLE)
         try {
             const msg = JSON.parse(data);
 
@@ -43,6 +46,7 @@ wss.on('connection', (ws) => {
     });
 });
 
-server.listen(PORT, () => {
+// ⚠️ opcional mas recomendado
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Servidor rodando na porta ${PORT}`);
 });
