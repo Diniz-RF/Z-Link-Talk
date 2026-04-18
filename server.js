@@ -1,5 +1,6 @@
 const http = require("http");
 const WebSocket = require("ws");
+const { v4: uuidv4 } = require("uuid");
 
 const server = http.createServer((req, res) => {
   res.writeHead(200);
@@ -8,26 +9,36 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocket.Server({ server });
 
+// Lista de clientes conectados
 let clients = [];
 
 wss.on("connection", (ws) => {
 
-  const id = Math.random().toString(36).substr(2, 9);
+  // 🔥 ID profissional (sem colisão)
+  const id = uuidv4();
+
   ws.id = id;
+  ws.name = "Anônimo";
 
   clients.push(ws);
 
-  // envia init
+  console.log(`Cliente conectado: ${id}`);
+
+  // 📡 Envia lista inicial com nomes
   ws.send(JSON.stringify({
     type: "init",
     id,
-    clients: clients.map(c => c.id)
+    clients: clients.map(c => ({
+      id: c.id,
+      name: c.name
+    }))
   }));
 
-  // avisa outros
+  // 📢 Notifica outros usuários
   broadcast({
     type: "new_peer",
-    id
+    id,
+    name: ws.name
   }, ws);
 
   ws.on("message", (msg) => {
@@ -41,9 +52,22 @@ wss.on("connection", (ws) => {
 
     data.from = ws.id;
 
+    // 🧠 IDENTIFICAÇÃO DO USUÁRIO
+    if (data.type === "identify") {
+      ws.name = data.name || "Anônimo";
+
+      console.log(`Usuário identificado: ${ws.id} → ${ws.name}`);
+
+      return;
+    }
+
+    // 🔥 Adiciona nome em TODAS mensagens
+    data.name = ws.name;
+
     if (data.to) {
       const target = clients.find(c => c.id === data.to);
-      if (target) {
+
+      if (target && target.readyState === WebSocket.OPEN) {
         target.send(JSON.stringify(data));
       }
     } else {
@@ -52,11 +76,14 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
+    console.log(`Cliente desconectado: ${ws.id}`);
+
     clients = clients.filter(c => c !== ws);
 
     broadcast({
       type: "peer_left",
-      id
+      id: ws.id,
+      name: ws.name
     });
   });
 
