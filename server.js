@@ -1,89 +1,77 @@
-const WebSocket = require('ws');
-const http = require('http');
-const { v4: uuidv4 } = require('uuid');
+const http = require("http");
+const WebSocket = require("ws");
 
-const PORT = process.env.PORT || 3000;
-
-// Servidor HTTP para compatibilidade com o Render
 const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Servidor Z-Link Talk Ativo');
+  res.writeHead(200);
+  res.end("Z-Link Talk Server OK");
 });
 
 const wss = new WebSocket.Server({ server });
 
-const clients = new Map();
-let currentTransmitter = null;
+let clients = [];
 
-wss.on('connection', (ws) => {
-    const clientId = uuidv4().substring(0, 8);
-    clients.set(ws, clientId);
+wss.on("connection", (ws) => {
 
-    // Enviar ID inicial e lista de clientes
-    ws.send(JSON.stringify({
-        type: "init",
-        id: clientId,
-        clients: Array.from(clients.values())
-    }));
+  const id = Math.random().toString(36).substr(2, 9);
+  ws.id = id;
 
-    broadcast(JSON.stringify({ type: "new_peer", id: clientId }), ws);
+  clients.push(ws);
 
-    ws.on('message', (data) => {
-        // TRATAMENTO DE ÁUDIO BINÁRIO (BUFFER)
-        if (Buffer.isBuffer(data)) {
-            // Só faz broadcast se for o transmissor atual ou se o canal estiver "aberto"
-            if (currentTransmitter === clientId || currentTransmitter === null) {
-                broadcast(data, ws);
-            }
-            return;
-        }
+  // envia init
+  ws.send(JSON.stringify({
+    type: "init",
+    id,
+    clients: clients.map(c => c.id)
+  }));
 
-        // TRATAMENTO DE SINALIZAÇÃO JSON
-        try {
-            const msg = JSON.parse(data);
-            
-            switch (msg.type) {
-                case "start_tx":
-                    if (!currentTransmitter) {
-                        currentTransmitter = clientId;
-                        msg.from = clientId;
-                        broadcast(JSON.stringify(msg), ws);
-                    }
-                    break;
+  // avisa outros
+  broadcast({
+    type: "new_peer",
+    id
+  }, ws);
 
-                case "stop_tx":
-                    if (currentTransmitter === clientId) {
-                        currentTransmitter = null;
-                        msg.from = clientId;
-                        broadcast(JSON.stringify(msg), ws);
-                    }
-                    break;
+  ws.on("message", (msg) => {
+    let data;
 
-                default:
-                    msg.from = clientId;
-                    broadcast(JSON.stringify(msg), ws);
-                    break;
-            }
-        } catch (err) {
-            // Ignora erros de parsing de dados que não sejam JSON
-        }
+    try {
+      data = JSON.parse(msg);
+    } catch {
+      return;
+    }
+
+    data.from = ws.id;
+
+    if (data.to) {
+      const target = clients.find(c => c.id === data.to);
+      if (target) {
+        target.send(JSON.stringify(data));
+      }
+    } else {
+      broadcast(data, ws);
+    }
+  });
+
+  ws.on("close", () => {
+    clients = clients.filter(c => c !== ws);
+
+    broadcast({
+      type: "peer_left",
+      id
     });
+  });
 
-    ws.on('close', () => {
-        if (currentTransmitter === clientId) currentTransmitter = null;
-        clients.delete(ws);
-        broadcast(JSON.stringify({ type: "peer_left", id: clientId }));
+  function broadcast(data, sender = null) {
+    clients.forEach(client => {
+      if (client !== sender && client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(data));
+      }
     });
+  }
+
 });
 
-function broadcast(data, sender) {
-    clients.forEach((id, client) => {
-        if (client !== sender && client.readyState === WebSocket.OPEN) {
-            client.send(data);
-        }
-    });
-}
+const PORT = process.env.PORT || 3000;
 
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
+server.listen(PORT, () => {
+  console.log("Servidor rodando na porta", PORT);
 });
