@@ -1,6 +1,10 @@
 const WebSocket = require('ws');
+const http = require('http');
 
-const wss = new WebSocket.Server({ port: 3000 });
+const PORT = process.env.PORT || 3000;
+
+const server = http.createServer();
+const wss = new WebSocket.Server({ server });
 
 let clients = [];
 
@@ -9,7 +13,7 @@ wss.on('connection', (ws) => {
 
     ws.on('message', (data) => {
 
-        // 🔥 Se for binário (áudio)
+        // 🔥 BINÁRIO (ÁUDIO)
         if (Buffer.isBuffer(data)) {
             clients.forEach(client => {
                 if (client !== ws && client.readyState === WebSocket.OPEN) {
@@ -19,7 +23,7 @@ wss.on('connection', (ws) => {
             return;
         }
 
-        // 🔥 Se for JSON (controle)
+        // 🔥 JSON (CONTROLE)
         try {
             const msg = JSON.parse(data);
 
@@ -30,7 +34,7 @@ wss.on('connection', (ws) => {
             });
 
         } catch (err) {
-            console.log("Mensagem inválida");
+            console.log("Erro ao processar mensagem");
         }
     });
 
@@ -39,4 +43,6 @@ wss.on('connection', (ws) => {
     });
 });
 
-console.log("Servidor rodando na porta 3000");
+server.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+});
