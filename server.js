@@ -1,77 +1,42 @@
-const http = require("http");
-const WebSocket = require("ws");
+const WebSocket = require('ws');
 
-const server = http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("Z-Link Talk Server OK");
-});
-
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ port: 3000 });
 
 let clients = [];
 
-wss.on("connection", (ws) => {
+wss.on('connection', (ws) => {
+    clients.push(ws);
 
-  const id = Math.random().toString(36).substr(2, 9);
-  ws.id = id;
+    ws.on('message', (data) => {
 
-  clients.push(ws);
+        // 🔥 Se for binário (áudio)
+        if (Buffer.isBuffer(data)) {
+            clients.forEach(client => {
+                if (client !== ws && client.readyState === WebSocket.OPEN) {
+                    client.send(data);
+                }
+            });
+            return;
+        }
 
-  // envia init
-  ws.send(JSON.stringify({
-    type: "init",
-    id,
-    clients: clients.map(c => c.id)
-  }));
+        // 🔥 Se for JSON (controle)
+        try {
+            const msg = JSON.parse(data);
 
-  // avisa outros
-  broadcast({
-    type: "new_peer",
-    id
-  }, ws);
+            clients.forEach(client => {
+                if (client !== ws && client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify(msg));
+                }
+            });
 
-  ws.on("message", (msg) => {
-    let data;
-
-    try {
-      data = JSON.parse(msg);
-    } catch {
-      return;
-    }
-
-    data.from = ws.id;
-
-    if (data.to) {
-      const target = clients.find(c => c.id === data.to);
-      if (target) {
-        target.send(JSON.stringify(data));
-      }
-    } else {
-      broadcast(data, ws);
-    }
-  });
-
-  ws.on("close", () => {
-    clients = clients.filter(c => c !== ws);
-
-    broadcast({
-      type: "peer_left",
-      id
+        } catch (err) {
+            console.log("Mensagem inválida");
+        }
     });
-  });
 
-  function broadcast(data, sender = null) {
-    clients.forEach(client => {
-      if (client !== sender && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(data));
-      }
+    ws.on('close', () => {
+        clients = clients.filter(c => c !== ws);
     });
-  }
-
 });
 
-const PORT = process.env.PORT || 3000;
-
-server.listen(PORT, () => {
-  console.log("Servidor rodando na porta", PORT);
-});
+console.log("Servidor rodando na porta 3000");
