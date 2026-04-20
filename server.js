@@ -75,7 +75,7 @@ if (data.type === "identify") {
 
   console.log(`Usuário ativo: ${userId} → ${ws.name}`);
 
-  // 🔥 INIT (somente para quem conectou)
+  // 🔥 INIT
   ws.send(JSON.stringify({
     type: "init",
     id: userId,
@@ -92,7 +92,7 @@ if (data.type === "identify") {
   return;
 }
 
-// 🔥 BLOQUEIA MENSAGENS ANTES DE IDENTIFICAR
+// 🔥 bloqueia mensagens antes de identificar
 if (!ws.userId) return;
 
 // 🔥 ATUALIZAÇÃO DE NOME (SEM RECONEXÃO)
@@ -191,6 +191,7 @@ try {
 
 const PORT = process.env.PORT || 3000;
 
-server.listen(PORT, () => {
+// 🔥 CORREÇÃO FINAL PARA RENDER
+server.listen(PORT, "0.0.0.0", () => {
 console.log("Servidor rodando na porta", PORT);
 });
