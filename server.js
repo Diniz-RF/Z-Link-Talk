@@ -16,11 +16,11 @@ wss.on("connection", (ws) => {
 
   ws.userId = null;
   ws.name = "Anônimo";
-  ws.isAlive = true; // 🔥 heartbeat
+  ws.isAlive = true;
 
   console.log("Nova conexão recebida");
 
-  // 🔥 resposta ao ping
+  // 🔥 heartbeat pong
   ws.on("pong", () => {
     ws.isAlive = true;
   });
@@ -38,21 +38,17 @@ wss.on("connection", (ws) => {
     if (data.type === "identify") {
 
       const { userId, name } = data;
-
       if (!userId) return;
 
-      // 🔥 encerra conexão antiga do mesmo usuário
+      // 🔥 encerra conexão antiga + REMOVE IMEDIATO (CORREÇÃO FINAL)
       if (clients.has(userId)) {
         const oldClient = clients.get(userId);
 
         try {
-          if (
-            oldClient.readyState === WebSocket.OPEN ||
-            oldClient.readyState === WebSocket.CONNECTING
-          ) {
-            oldClient.close();
-          }
+          oldClient.terminate(); // 💥 imediato
         } catch {}
+
+        clients.delete(userId); // 💥 remove do estado na hora
       }
 
       ws.userId = userId;
@@ -62,14 +58,16 @@ wss.on("connection", (ws) => {
 
       console.log(`Usuário ativo: ${userId} → ${ws.name}`);
 
-      // 🔥 envia estado inicial
+      // 🔥 envia estado inicial (FILTRADO)
       ws.send(JSON.stringify({
         type: "init",
         id: userId,
-        clients: Array.from(clients.values()).map(c => ({
-          id: c.userId,
-          name: c.name
-        })),
+        clients: Array.from(clients.values())
+          .filter(c => c.readyState === WebSocket.OPEN)
+          .map(c => ({
+            id: c.userId,
+            name: c.name
+          })),
         activeTransmitters: Array.from(activeTransmitters)
       }));
 
@@ -136,7 +134,7 @@ wss.on("connection", (ws) => {
 
 });
 
-// 🔥 HEARTBEAT GLOBAL (remove conexões mortas)
+// 🔥 HEARTBEAT GLOBAL
 setInterval(() => {
   clients.forEach((ws, userId) => {
 
