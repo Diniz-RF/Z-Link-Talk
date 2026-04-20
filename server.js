@@ -1,6 +1,5 @@
 const http = require("http");
 const WebSocket = require("ws");
-const { v4: uuidv4 } = require("uuid");
 
 const server = http.createServer((req, res) => {
   res.writeHead(200);
@@ -9,40 +8,22 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocket.Server({ server });
 
-// Lista de clientes conectados
-let clients = [];
-
-// 🔥 NOVO: controle de quem está transmitindo
+// 🔥 controle real por userId
+let clients = new Map(); // userId -> ws
 let activeTransmitters = new Set();
 
 wss.on("connection", (ws) => {
 
-  const id = uuidv4();
-
-  ws.id = id;
+  ws.userId = null;
   ws.name = "Anônimo";
+  ws.isAlive = true; // 🔥 heartbeat
 
-  clients.push(ws);
+  console.log("Nova conexão recebida");
 
-  console.log(`Cliente conectado: ${id}`);
-
-  // 📡 INIT agora inclui transmissores ativos
-  ws.send(JSON.stringify({
-    type: "init",
-    id,
-    clients: clients.map(c => ({
-      id: c.id,
-      name: c.name
-    })),
-    activeTransmitters: Array.from(activeTransmitters)
-  }));
-
-  // 📢 Notifica outros usuários
-  broadcast({
-    type: "new_peer",
-    id,
-    name: ws.name
-  }, ws);
+  // 🔥 resposta ao ping
+  ws.on("pong", () => {
+    ws.isAlive = true;
+  });
 
   ws.on("message", (msg) => {
     let data;
@@ -53,37 +34,70 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    data.from = ws.id;
-
-    // 🧠 IDENTIFICAÇÃO DO USUÁRIO
+    // 🔥 IDENTIFICAÇÃO
     if (data.type === "identify") {
-      ws.name = data.name || "Anônimo";
 
-      console.log(`Usuário identificado: ${ws.id} → ${ws.name}`);
+      const { userId, name } = data;
+
+      if (!userId) return;
+
+      // 🔥 encerra conexão antiga do mesmo usuário
+      if (clients.has(userId)) {
+        const oldClient = clients.get(userId);
+
+        try {
+          if (
+            oldClient.readyState === WebSocket.OPEN ||
+            oldClient.readyState === WebSocket.CONNECTING
+          ) {
+            oldClient.close();
+          }
+        } catch {}
+      }
+
+      ws.userId = userId;
+      ws.name = name || "Anônimo";
+
+      clients.set(userId, ws);
+
+      console.log(`Usuário ativo: ${userId} → ${ws.name}`);
+
+      // 🔥 envia estado inicial
+      ws.send(JSON.stringify({
+        type: "init",
+        id: userId,
+        clients: Array.from(clients.values()).map(c => ({
+          id: c.userId,
+          name: c.name
+        })),
+        activeTransmitters: Array.from(activeTransmitters)
+      }));
 
       broadcast({
         type: "user_update",
-        id: ws.id,
+        id: userId,
         name: ws.name
       });
 
       return;
     }
 
-    // 🔥 CONTROLE DE TRANSMISSÃO
+    if (!ws.userId) return;
+
+    data.from = ws.userId;
+    data.name = ws.name;
+
+    // 🔥 controle de transmissão
     if (data.type === "start_tx") {
-      activeTransmitters.add(ws.id);
+      activeTransmitters.add(ws.userId);
     }
 
     if (data.type === "stop_tx") {
-      activeTransmitters.delete(ws.id);
+      activeTransmitters.delete(ws.userId);
     }
 
-    // 🔥 sempre enviar nome junto
-    data.name = ws.name;
-
     if (data.to) {
-      const target = clients.find(c => c.id === data.to);
+      const target = clients.get(data.to);
 
       if (target && target.readyState === WebSocket.OPEN) {
         target.send(JSON.stringify(data));
@@ -94,18 +108,22 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
-    console.log(`Cliente desconectado: ${ws.id}`);
+    if (ws.userId) {
+      console.log(`Desconectado: ${ws.userId}`);
 
-    clients = clients.filter(c => c !== ws);
+      // 🔥 proteção contra race condition
+      if (clients.get(ws.userId) === ws) {
+        clients.delete(ws.userId);
+      }
 
-    // 🔥 garantir limpeza do estado de transmissão
-    activeTransmitters.delete(ws.id);
+      activeTransmitters.delete(ws.userId);
 
-    broadcast({
-      type: "peer_left",
-      id: ws.id,
-      name: ws.name
-    });
+      broadcast({
+        type: "peer_left",
+        id: ws.userId,
+        name: ws.name
+      });
+    }
   });
 
   function broadcast(data, sender = null) {
@@ -117,6 +135,27 @@ wss.on("connection", (ws) => {
   }
 
 });
+
+// 🔥 HEARTBEAT GLOBAL (remove conexões mortas)
+setInterval(() => {
+  clients.forEach((ws, userId) => {
+
+    if (ws.isAlive === false) {
+      console.log(`Removendo cliente inativo: ${userId}`);
+
+      ws.terminate();
+      clients.delete(userId);
+      activeTransmitters.delete(userId);
+      return;
+    }
+
+    ws.isAlive = false;
+
+    try {
+      ws.ping();
+    } catch {}
+  });
+}, 30000);
 
 const PORT = process.env.PORT || 3000;
 
