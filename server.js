@@ -1,125 +1,198 @@
 const http = require("http");
 const WebSocket = require("ws");
-const { v4: uuidv4 } = require("uuid");
 
 const server = http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("Z-Link Talk Server OK");
+res.writeHead(200);
+res.end("Z-Link Talk Server OK");
 });
 
 const wss = new WebSocket.Server({ server });
 
-// Lista de clientes conectados
-let clients = [];
-
-// 🔥 NOVO: controle de quem está transmitindo
+// 🔥 controle real por userId
+let clients = new Map(); // userId -> ws
 let activeTransmitters = new Set();
+
+function getClientList() {
+return Array.from(clients.values())
+.filter(c => c.readyState === WebSocket.OPEN)
+.map(c => ({
+id: c.userId,
+name: c.name
+}));
+}
+
+function broadcast(data) {
+clients.forEach(client => {
+if (client.readyState === WebSocket.OPEN) {
+client.send(JSON.stringify(data));
+}
+});
+}
 
 wss.on("connection", (ws) => {
 
-  const id = uuidv4();
+ws.userId = null;
+ws.name = "Anônimo";
+ws.isAlive = true;
 
-  ws.id = id;
-  ws.name = "Anônimo";
+console.log("Nova conexão recebida");
 
-  clients.push(ws);
+ws.on("pong", () => {
+ws.isAlive = true;
+});
 
-  console.log(`Cliente conectado: ${id}`);
+ws.on("message", (msg) => {
+let data;
 
-  // 📡 INIT agora inclui transmissores ativos
+
+try {
+  // 🔥 CORREÇÃO CRÍTICA PARA NODE 22
+  data = JSON.parse(msg.toString());
+} catch {
+  return;
+}
+
+// 🔥 IDENTIFICAÇÃO
+if (data.type === "identify") {
+
+  const { userId, name } = data;
+  if (!userId) return;
+
+  // 🔥 remove conexão antiga
+  if (clients.has(userId)) {
+    const oldClient = clients.get(userId);
+
+    try {
+      oldClient.terminate();
+    } catch {}
+
+    clients.delete(userId);
+  }
+
+  ws.userId = userId;
+  ws.name = name || "Anônimo";
+
+  clients.set(userId, ws);
+
+  console.log(`Usuário ativo: ${userId} → ${ws.name}`);
+
+  // 🔥 INIT
   ws.send(JSON.stringify({
     type: "init",
-    id,
-    clients: clients.map(c => ({
-      id: c.id,
-      name: c.name
-    })),
+    id: userId,
+    clients: getClientList(),
     activeTransmitters: Array.from(activeTransmitters)
   }));
 
-  // 📢 Notifica outros usuários
+  // 🔥 sincroniza TODOS
   broadcast({
-    type: "new_peer",
-    id,
+    type: "user_list",
+    clients: getClientList()
+  });
+
+  return;
+}
+
+// 🔥 bloqueia mensagens antes de identificar
+if (!ws.userId) return;
+
+// 🔥 ATUALIZAÇÃO DE NOME (SEM RECONEXÃO)
+if (data.type === "update_name") {
+  ws.name = data.name || "Anônimo";
+
+  console.log(`Nome atualizado: ${ws.userId} → ${ws.name}`);
+
+  broadcast({
+    type: "user_update",
+    id: ws.userId,
     name: ws.name
-  }, ws);
-
-  ws.on("message", (msg) => {
-    let data;
-
-    try {
-      data = JSON.parse(msg);
-    } catch {
-      return;
-    }
-
-    data.from = ws.id;
-
-    // 🧠 IDENTIFICAÇÃO DO USUÁRIO
-    if (data.type === "identify") {
-      ws.name = data.name || "Anônimo";
-
-      console.log(`Usuário identificado: ${ws.id} → ${ws.name}`);
-
-      broadcast({
-        type: "user_update",
-        id: ws.id,
-        name: ws.name
-      });
-
-      return;
-    }
-
-    // 🔥 CONTROLE DE TRANSMISSÃO
-    if (data.type === "start_tx") {
-      activeTransmitters.add(ws.id);
-    }
-
-    if (data.type === "stop_tx") {
-      activeTransmitters.delete(ws.id);
-    }
-
-    // 🔥 sempre enviar nome junto
-    data.name = ws.name;
-
-    if (data.to) {
-      const target = clients.find(c => c.id === data.to);
-
-      if (target && target.readyState === WebSocket.OPEN) {
-        target.send(JSON.stringify(data));
-      }
-    } else {
-      broadcast(data, ws);
-    }
   });
 
-  ws.on("close", () => {
-    console.log(`Cliente desconectado: ${ws.id}`);
+  return;
+}
 
-    clients = clients.filter(c => c !== ws);
+data.from = ws.userId;
+data.name = ws.name;
 
-    // 🔥 garantir limpeza do estado de transmissão
-    activeTransmitters.delete(ws.id);
+// 🔥 controle de transmissão
+if (data.type === "start_tx") {
+  activeTransmitters.add(ws.userId);
+}
 
-    broadcast({
-      type: "peer_left",
-      id: ws.id,
-      name: ws.name
-    });
-  });
+if (data.type === "stop_tx") {
+  activeTransmitters.delete(ws.userId);
+}
 
-  function broadcast(data, sender = null) {
-    clients.forEach(client => {
-      if (client !== sender && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(data));
-      }
-    });
+if (data.to) {
+  const target = clients.get(data.to);
+
+  if (target && target.readyState === WebSocket.OPEN) {
+    target.send(JSON.stringify(data));
   }
+} else {
+  broadcast(data);
+}
+
 
 });
 
+ws.on("close", () => {
+if (ws.userId) {
+console.log(`Desconectado: ${ws.userId}`);
+
+
+  if (clients.get(ws.userId) === ws) {
+    clients.delete(ws.userId);
+  }
+
+  activeTransmitters.delete(ws.userId);
+
+  // 🔥 sincroniza TODOS ao sair
+  broadcast({
+    type: "user_list",
+    clients: getClientList()
+  });
+}
+
+
+});
+
+});
+
+// 🔥 HEARTBEAT GLOBAL
+setInterval(() => {
+clients.forEach((ws, userId) => {
+
+
+if (ws.isAlive === false) {
+  console.log(`Removendo cliente inativo: ${userId}`);
+
+  ws.terminate();
+  clients.delete(userId);
+  activeTransmitters.delete(userId);
+
+  // 🔥 sincroniza após remover morto
+  broadcast({
+    type: "user_list",
+    clients: getClientList()
+  });
+
+  return;
+}
+
+ws.isAlive = false;
+
+try {
+  ws.ping();
+} catch {}
+
+
+});
+}, 30000);
+
 const PORT = process.env.PORT || 3000;
 
-server.listen(PORT, () => {
-  console.log("Servidor rodando na porta", PORT);
+// 🔥 CORREÇÃO FINAL PARA RENDER
+server.listen(PORT, "0.0.0.0", () => {
+console.log("Servidor rodando na porta", PORT);
 });
