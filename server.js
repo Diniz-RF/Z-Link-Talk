@@ -1,198 +1,125 @@
 const http = require("http");
 const WebSocket = require("ws");
+const { v4: uuidv4 } = require("uuid");
 
 const server = http.createServer((req, res) => {
-res.writeHead(200);
-res.end("Z-Link Talk Server OK");
+  res.writeHead(200);
+  res.end("Z-Link Talk Server OK");
 });
 
 const wss = new WebSocket.Server({ server });
 
-// 🔥 controle real por userId
-let clients = new Map(); // userId -> ws
+// Lista de clientes conectados
+let clients = [];
+
+// 🔥 NOVO: controle de quem está transmitindo
 let activeTransmitters = new Set();
-
-function getClientList() {
-return Array.from(clients.values())
-.filter(c => c.readyState === WebSocket.OPEN)
-.map(c => ({
-id: c.userId,
-name: c.name
-}));
-}
-
-function broadcast(data) {
-clients.forEach(client => {
-if (client.readyState === WebSocket.OPEN) {
-client.send(JSON.stringify(data));
-}
-});
-}
 
 wss.on("connection", (ws) => {
 
-ws.userId = null;
-ws.name = "Anônimo";
-ws.isAlive = true;
+  const id = uuidv4();
 
-console.log("Nova conexão recebida");
+  ws.id = id;
+  ws.name = "Anônimo";
 
-ws.on("pong", () => {
-ws.isAlive = true;
-});
+  clients.push(ws);
 
-ws.on("message", (msg) => {
-let data;
+  console.log(`Cliente conectado: ${id}`);
 
-```
-try {
-  data = JSON.parse(msg);
-} catch {
-  return;
-}
-
-// 🔥 IDENTIFICAÇÃO
-if (data.type === "identify") {
-
-  const { userId, name } = data;
-  if (!userId) return;
-
-  // 🔥 remove conexão antiga
-  if (clients.has(userId)) {
-    const oldClient = clients.get(userId);
-
-    try {
-      oldClient.terminate();
-    } catch {}
-
-    clients.delete(userId);
-  }
-
-  ws.userId = userId;
-  ws.name = name || "Anônimo";
-
-  clients.set(userId, ws);
-
-  // ✅ CORRIGIDO (template string)
-  console.log(`Usuário ativo: ${userId} → ${ws.name}`);
-
-  // 🔥 INIT
+  // 📡 INIT agora inclui transmissores ativos
   ws.send(JSON.stringify({
     type: "init",
-    id: userId,
-    clients: getClientList(),
+    id,
+    clients: clients.map(c => ({
+      id: c.id,
+      name: c.name
+    })),
     activeTransmitters: Array.from(activeTransmitters)
   }));
 
-  // 🔥 sincroniza TODOS
+  // 📢 Notifica outros usuários
   broadcast({
-    type: "user_list",
-    clients: getClientList()
-  });
-
-  return;
-}
-
-// 🔥 bloqueia mensagens antes de identificar
-if (!ws.userId) return;
-
-// 🔥 ATUALIZAÇÃO DE NOME (SEM RECONEXÃO)
-if (data.type === "update_name") {
-  ws.name = data.name || "Anônimo";
-
-  console.log(`Nome atualizado: ${ws.userId} → ${ws.name}`);
-
-  broadcast({
-    type: "user_update",
-    id: ws.userId,
+    type: "new_peer",
+    id,
     name: ws.name
+  }, ws);
+
+  ws.on("message", (msg) => {
+    let data;
+
+    try {
+      data = JSON.parse(msg);
+    } catch {
+      return;
+    }
+
+    data.from = ws.id;
+
+    // 🧠 IDENTIFICAÇÃO DO USUÁRIO
+    if (data.type === "identify") {
+      ws.name = data.name || "Anônimo";
+
+      console.log(`Usuário identificado: ${ws.id} → ${ws.name}`);
+
+      broadcast({
+        type: "user_update",
+        id: ws.id,
+        name: ws.name
+      });
+
+      return;
+    }
+
+    // 🔥 CONTROLE DE TRANSMISSÃO
+    if (data.type === "start_tx") {
+      activeTransmitters.add(ws.id);
+    }
+
+    if (data.type === "stop_tx") {
+      activeTransmitters.delete(ws.id);
+    }
+
+    // 🔥 sempre enviar nome junto
+    data.name = ws.name;
+
+    if (data.to) {
+      const target = clients.find(c => c.id === data.to);
+
+      if (target && target.readyState === WebSocket.OPEN) {
+        target.send(JSON.stringify(data));
+      }
+    } else {
+      broadcast(data, ws);
+    }
   });
 
-  return;
-}
+  ws.on("close", () => {
+    console.log(`Cliente desconectado: ${ws.id}`);
 
-data.from = ws.userId;
-data.name = ws.name;
+    clients = clients.filter(c => c !== ws);
 
-// 🔥 controle de transmissão
-if (data.type === "start_tx") {
-  activeTransmitters.add(ws.userId);
-}
+    // 🔥 garantir limpeza do estado de transmissão
+    activeTransmitters.delete(ws.id);
 
-if (data.type === "stop_tx") {
-  activeTransmitters.delete(ws.userId);
-}
+    broadcast({
+      type: "peer_left",
+      id: ws.id,
+      name: ws.name
+    });
+  });
 
-if (data.to) {
-  const target = clients.get(data.to);
-
-  if (target && target.readyState === WebSocket.OPEN) {
-    target.send(JSON.stringify(data));
+  function broadcast(data, sender = null) {
+    clients.forEach(client => {
+      if (client !== sender && client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(data));
+      }
+    });
   }
-} else {
-  broadcast(data);
-}
-```
 
 });
-
-ws.on("close", () => {
-if (ws.userId) {
-console.log(`Desconectado: ${ws.userId}`);
-
-```
-  if (clients.get(ws.userId) === ws) {
-    clients.delete(ws.userId);
-  }
-
-  activeTransmitters.delete(ws.userId);
-
-  // 🔥 sincroniza TODOS ao sair
-  broadcast({
-    type: "user_list",
-    clients: getClientList()
-  });
-}
-```
-
-});
-
-});
-
-// 🔥 HEARTBEAT GLOBAL
-setInterval(() => {
-clients.forEach((ws, userId) => {
-
-```
-if (ws.isAlive === false) {
-  console.log(`Removendo cliente inativo: ${userId}`);
-
-  ws.terminate();
-  clients.delete(userId);
-  activeTransmitters.delete(userId);
-
-  // 🔥 sincroniza após remover morto
-  broadcast({
-    type: "user_list",
-    clients: getClientList()
-  });
-
-  return;
-}
-
-ws.isAlive = false;
-
-try {
-  ws.ping();
-} catch {}
-```
-
-});
-}, 30000);
 
 const PORT = process.env.PORT || 3000;
 
-// 🔥 CORREÇÃO FINAL PARA RENDER
-server.listen(PORT, "0.0.0.0", () => {
-console.log("Servidor rodando na porta", PORT);
+server.listen(PORT, () => {
+  console.log("Servidor rodando na porta", PORT);
 });
