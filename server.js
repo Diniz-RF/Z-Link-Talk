@@ -73,6 +73,7 @@ if (data.type === "identify") {
 
   clients.set(userId, ws);
 
+  // ✅ CORRIGIDO (template string)
   console.log(`Usuário ativo: ${userId} → ${ws.name}`);
 
   // 🔥 INIT
