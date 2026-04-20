@@ -12,6 +12,23 @@ const wss = new WebSocket.Server({ server });
 let clients = new Map(); // userId -> ws
 let activeTransmitters = new Set();
 
+function getClientList() {
+  return Array.from(clients.values())
+    .filter(c => c.readyState === WebSocket.OPEN)
+    .map(c => ({
+      id: c.userId,
+      name: c.name
+    }));
+}
+
+function broadcast(data) {
+  clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  });
+}
+
 wss.on("connection", (ws) => {
 
   ws.userId = null;
@@ -20,7 +37,6 @@ wss.on("connection", (ws) => {
 
   console.log("Nova conexão recebida");
 
-  // 🔥 heartbeat pong
   ws.on("pong", () => {
     ws.isAlive = true;
   });
@@ -40,15 +56,15 @@ wss.on("connection", (ws) => {
       const { userId, name } = data;
       if (!userId) return;
 
-      // 🔥 encerra conexão antiga + REMOVE IMEDIATO (CORREÇÃO FINAL)
+      // 🔥 remove conexão antiga
       if (clients.has(userId)) {
         const oldClient = clients.get(userId);
 
         try {
-          oldClient.terminate(); // 💥 imediato
+          oldClient.terminate();
         } catch {}
 
-        clients.delete(userId); // 💥 remove do estado na hora
+        clients.delete(userId);
       }
 
       ws.userId = userId;
@@ -58,23 +74,18 @@ wss.on("connection", (ws) => {
 
       console.log(`Usuário ativo: ${userId} → ${ws.name}`);
 
-      // 🔥 envia estado inicial (FILTRADO)
+      // 🔥 INIT (somente para quem conectou)
       ws.send(JSON.stringify({
         type: "init",
         id: userId,
-        clients: Array.from(clients.values())
-          .filter(c => c.readyState === WebSocket.OPEN)
-          .map(c => ({
-            id: c.userId,
-            name: c.name
-          })),
+        clients: getClientList(),
         activeTransmitters: Array.from(activeTransmitters)
       }));
 
+      // 🔥 sincroniza TODOS
       broadcast({
-        type: "user_update",
-        id: userId,
-        name: ws.name
+        type: "user_list",
+        clients: getClientList()
       });
 
       return;
@@ -101,7 +112,7 @@ wss.on("connection", (ws) => {
         target.send(JSON.stringify(data));
       }
     } else {
-      broadcast(data, ws);
+      broadcast(data);
     }
   });
 
@@ -109,28 +120,19 @@ wss.on("connection", (ws) => {
     if (ws.userId) {
       console.log(`Desconectado: ${ws.userId}`);
 
-      // 🔥 proteção contra race condition
       if (clients.get(ws.userId) === ws) {
         clients.delete(ws.userId);
       }
 
       activeTransmitters.delete(ws.userId);
 
+      // 🔥 sincroniza TODOS ao sair
       broadcast({
-        type: "peer_left",
-        id: ws.userId,
-        name: ws.name
+        type: "user_list",
+        clients: getClientList()
       });
     }
   });
-
-  function broadcast(data, sender = null) {
-    clients.forEach(client => {
-      if (client !== sender && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(data));
-      }
-    });
-  }
 
 });
 
@@ -144,6 +146,13 @@ setInterval(() => {
       ws.terminate();
       clients.delete(userId);
       activeTransmitters.delete(userId);
+
+      // 🔥 sincroniza após remover morto
+      broadcast({
+        type: "user_list",
+        clients: getClientList()
+      });
+
       return;
     }
 
